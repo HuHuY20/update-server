@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
 const dotenv = require('dotenv');
+const rateLimit = require('express-rate-limit');
 
 // تحميل متغيرات البيئة
 dotenv.config();
@@ -15,9 +16,23 @@ const MIN_VERSION_IOS = process.env.MIN_VERSION_IOS || '1.0.1';
 // إنشاء تطبيق Express
 const app = express();
 
+// إعداد تقييد المعدل (Rate Limiting)
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 دقيقة
+  max: 100, // الحد الأقصى 100 طلب لكل IP خلال فترة 15 دقيقة
+  standardHeaders: true, // إرجاع معلومات Rate Limit في رؤوس `RateLimit-*`
+  legacyHeaders: false, // تعطيل رؤوس `X-RateLimit-*` التقليدية
+  message: {
+    error: 'تم تجاوز الحد المسموح من الطلبات، يرجى المحاولة لاحقًا'
+  }
+});
+
 // ميدلوير
 app.use(cors({ origin: true }));
 app.use(express.json());
+
+// تطبيق تقييد المعدل على جميع الطلبات
+app.use(apiLimiter);
 
 // التحقق من صحة طلب التحديث
 function validateUpdateRequest(req, res, next) {
@@ -39,8 +54,17 @@ function generateSignature(data) {
   return hmac.digest('hex');
 }
 
+// إضافة ميدلوير للتخزين المؤقت (Cache Control)
+function setCacheHeaders(req, res, next) {
+  // تعيين رؤوس التخزين المؤقت للسماح بتخزين الاستجابة لمدة ساعة
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.set('Surrogate-Control', 'max-age=3600');
+  res.set('Expires', new Date(Date.now() + 3600000).toUTCString());
+  next();
+}
+
 // نقطة نهاية لفحص التحديثات
-app.post('/check', validateUpdateRequest, (req, res) => {
+app.post('/check', validateUpdateRequest, setCacheHeaders, (req, res) => {
   const { appId, currentVersion, buildNumber } = req.body;
   
   // تحديد الإصدار الأدنى المطلوب حسب النظام
@@ -71,7 +95,7 @@ app.post('/check', validateUpdateRequest, (req, res) => {
 });
 
 // مسار اختبار للتحقق من حالة الخادم
-app.get('/health', (req, res) => {
+app.get('/health', setCacheHeaders, (req, res) => {
   res.json({ status: 'OK', message: 'خادم التحديثات يعمل بشكل طبيعي' });
 });
 
